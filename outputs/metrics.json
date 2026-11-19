@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-11-19T09:05:43.269296+00:00",
+  "total_requests": 38,
+  "blocked_requests": 20,
+  "block_rate": 0.5263157894736842,
+  "rate_limit_hits": 5,
+  "judge_checks": 0,
+  "judge_fails": 0,
+  "judge_fail_rate": 0.0,
+  "alerts": [
+    {
+      "metric": "block_rate",
+      "value": 0.5263,
+      "threshold": 0.5,
+      "message": "Block rate 53% > 50%: possible attack campaign or over-blocking false positives."
+    },
+    {
+      "metric": "rate_limit_hits",
+      "value": 5.0,
+      "threshold": 5.0,
+      "message": "5 rate-limit hits (≥ 5): a client may be flooding the assistant."
+    }
+  ],
+  "blocked_by_layer": {
+    "input_guardrail": 15,
+    "rate_limiter": 5
+  },
+  "redacted_responses": 0,
+  "errors": 1,
+  "thresholds": {
+    "block_rate": 0.5,
+    "rate_limit_hits": 5,
+    "judge_fail_rate": 0.3
+  }
+}

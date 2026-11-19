@@ -169,8 +169,18 @@ def get_openai_api_key() -> str:
     return os.environ.get("OPENAI_API_KEY", "").strip()
 
 
+def get_openai_base_url() -> str | None:
+    """Endpoint OpenAI-compatible cho Red (vd. proxy). Trống → api.openai.com."""
+    value = os.environ.get("OPENAI_BASE_URL", "").strip().strip("\"'")
+    return value or None
+
+
 def red_openai_client_kwargs() -> dict:
-    return {"api_key": get_openai_api_key() or None}
+    kwargs = {"api_key": get_openai_api_key() or None}
+    base_url = get_openai_base_url()
+    if base_url:
+        kwargs["base_url"] = base_url
+    return kwargs
 
 
 def red_provider_label(tier: str = "advance") -> str:
