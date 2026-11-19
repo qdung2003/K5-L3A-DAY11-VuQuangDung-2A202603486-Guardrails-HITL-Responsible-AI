@@ -349,6 +349,9 @@ async def run_assignment_suite(pipeline) -> dict:
     ]
 
     # 3. Gom kết quả đúng schema
+    # Judge (nếu bật use_llm_judge) đếm trong OutputGuardrailPlugin → đồng bộ sang monitor
+    monitor.judge_checks = output_guard.judge_checks
+    monitor.judge_fails = output_guard.judge_fails
     monitor.check_metrics()
     results = {
         "framework": "google-adk",

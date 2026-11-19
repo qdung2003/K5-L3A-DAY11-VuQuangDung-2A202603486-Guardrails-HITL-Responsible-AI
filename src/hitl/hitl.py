@@ -67,32 +67,48 @@ class ConfidenceRouter:
         Returns:
             RoutingDecision with routing action and metadata
         """
-        # Optional: Implement routing logic
-        #
-        # 1. Check if action_type is in HIGH_RISK_ACTIONS
-        #    -> If yes: always escalate (action="escalate", priority="high",
-        #       requires_human=True, reason="High-risk action: {action_type}")
-        #
-        # 2. Check confidence thresholds:
-        #    - confidence >= 0.9:
-        #      action="auto_send", priority="low",
-        #      requires_human=False, reason="High confidence"
-        #
-        #    - 0.7 <= confidence < 0.9:
-        #      action="queue_review", priority="normal",
-        #      requires_human=True, reason="Medium confidence — needs review"
-        #
-        #    - confidence < 0.7:
-        #      action="escalate", priority="high",
-        #      requires_human=True, reason="Low confidence — escalating"
+        # Confidence ngoài [0, 1] hoặc không phải số → coi như thấp nhất (fail-safe)
+        try:
+            conf = float(confidence)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if not (0.0 <= conf <= 1.0):  # NaN hoặc ngoài khoảng → không tin được
+            conf = 0.0
 
+        # 1. Hành động rủi ro cao → luôn cần người duyệt, bất kể confidence
+        if action_type in HIGH_RISK_ACTIONS:
+            return RoutingDecision(
+                action="escalate",
+                confidence=conf,
+                reason=f"High-risk action: {action_type}",
+                priority="high",
+                requires_human=True,
+            )
+
+        # 2. Theo ngưỡng confidence
+        if conf >= self.HIGH_THRESHOLD:
+            return RoutingDecision(
+                action="auto_send",
+                confidence=conf,
+                reason="High confidence",
+                priority="low",
+                requires_human=False,
+            )
+        if conf >= self.MEDIUM_THRESHOLD:
+            return RoutingDecision(
+                action="queue_review",
+                confidence=conf,
+                reason="Medium confidence — needs review",
+                priority="normal",
+                requires_human=True,
+            )
         return RoutingDecision(
-            action="auto_send",
-            confidence=confidence,
-            reason="TODO: implement routing logic",
-            priority="low",
-            requires_human=False,
-        )  # TODO: Replace with implementation
+            action="escalate",
+            confidence=conf,
+            reason="Low confidence — escalating",
+            priority="high",
+            requires_human=True,
+        )
 
 
 # ============================================================
@@ -115,33 +131,89 @@ class ConfidenceRouter:
 hitl_decision_points = [
     {
         "id": 1,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "High-value / new-beneficiary money transfer",
+        "trigger": (
+            "Agent proposes transfer_money where amount ≥ 50,000,000 VND, OR the "
+            "beneficiary was added < 24h ago, OR the request originated from "
+            "untrusted content (email/RAG) rather than the authenticated user."
+        ),
+        "hitl_model": "human-in-the-loop",
+        "context_needed": (
+            "Authenticated customer ID, amount, source/destination accounts, "
+            "beneficiary age, the user's original message, any external document "
+            "that influenced the request, device/IP risk score, last 5 transactions."
+        ),
+        "example": (
+            "Customer asks to 'pay the invoice in this email': 120,000,000 VND to an "
+            "account first seen today. Agent drafts the transfer; it is held until a "
+            "payments officer verifies with the customer by phone."
+        ),
+        "approval_path": (
+            "Approve → execute once with approval_id HITL-XXXXXXXX bound to the exact "
+            "amount/destination. Reject → cancel and notify customer. Timeout (15 min) "
+            "→ auto-reject (fail-closed), never auto-approve."
+        ),
+        "audit_fields": (
+            "correlation_id, customer_id, intent=transfer_money, proposed action JSON, "
+            "diff vs. customer's stated intent, reviewer_id, decision, decided_at, "
+            "approval_id"
+        ),
     },
     {
         "id": 2,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "Account profile / credential change",
+        "trigger": (
+            "Agent proposes change_password, update_personal_info (phone, email, "
+            "address) or close_account — actions that enable account takeover."
+        ),
+        "hitl_model": "human-in-the-loop",
+        "context_needed": (
+            "Fields before/after (masked), authentication strength of the session "
+            "(OTP/biometric), recent failed logins, whether the new phone/email is "
+            "already linked to another customer."
+        ),
+        "example": (
+            "Chat session asks to change the registered phone number and then reset "
+            "the password. The change is queued; a reviewer checks KYC and sends an "
+            "OTP to the OLD phone before approving."
+        ),
+        "approval_path": (
+            "Approve → apply change, send confirmation to old and new contact. "
+            "Reject → keep current data, flag session for fraud review. Timeout "
+            "(30 min) → reject and ask the customer to visit a branch."
+        ),
+        "audit_fields": (
+            "correlation_id, customer_id, intent, field-level diff (masked), "
+            "auth method, reviewer_id, decision, reason_code, decided_at"
+        ),
     },
     {
         "id": 3,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "Low-confidence or guardrail-flagged answer",
+        "trigger": (
+            "ConfidenceRouter returns queue_review/escalate (confidence < 0.9), the "
+            "output guardrail redacted PII, or monitoring raises a block_rate alert "
+            "for the same session."
+        ),
+        "hitl_model": "human-on-the-loop",
+        "context_needed": (
+            "User question, draft answer, confidence score, guardrail issues found, "
+            "retrieved policy documents used as grounding, session history."
+        ),
+        "example": (
+            "Customer asks about early-withdrawal penalties on a 12-month deposit; "
+            "the model answers with confidence 0.74. The answer is queued; an agent "
+            "supervisor corrects the penalty rate before it is sent."
+        ),
+        "approval_path": (
+            "Approve → send draft as-is. Edit → send corrected answer and store the "
+            "edit as feedback. Reject → send a safe fallback ('a specialist will "
+            "contact you'). Timeout (5 min) → safe fallback, ticket stays open."
+        ),
+        "audit_fields": (
+            "correlation_id, session_id, intent, confidence, guardrail issues, "
+            "draft vs. final diff, reviewer_id, decision, latency_to_decision"
+        ),
     },
 ]
 

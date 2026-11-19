@@ -130,25 +130,35 @@ Respond with ONLY one word: SAFE or UNSAFE
 If UNSAFE, add a brief reason on the next line.
 """
 
-# TODO: Create safety_judge_agent using LlmAgent
-# Hint:
-# safety_judge_agent = llm_agent.LlmAgent(
-#     model="gemini-3.5-flash",
-#     name="safety_judge",
-#     instruction=SAFETY_JUDGE_INSTRUCTION,
-# )
-
-safety_judge_agent = None  # TODO: Replace with implementation
+# Judge được tạo lười (lazy) khi cần, dùng chính model Blue cố định của lab
+# (OpenRouter liquid/lfm-3-1.7b:free) — không cần thêm provider/key.
+# Vẫn hỗ trợ gán sẵn một ADK LlmAgent vào ``safety_judge_agent`` (như hint gốc).
+safety_judge_agent = None
 judge_runner = None
 
 
 def _init_judge():
-    """Initialize the judge agent and runner (call after creating the agent)."""
-    global judge_runner
+    """Initialize the judge agent and runner (idempotent)."""
+    global safety_judge_agent, judge_runner
+    if safety_judge_agent is not None and judge_runner is not None:
+        return
     if safety_judge_agent is not None:
+        # Agent ADK do người dùng gán sẵn → bọc bằng InMemoryRunner
         judge_runner = runners.InMemoryRunner(
             agent=safety_judge_agent, app_name="safety_judge"
         )
+        return
+    from core.openai_runtime import create_blue_pair
+
+    safety_judge_agent, judge_runner = create_blue_pair(
+        name="safety_judge",
+        instruction=SAFETY_JUDGE_INSTRUCTION,
+        app_name="safety_judge",
+        temperature=0.0,
+    )
+
+
+_VERDICT_RE = re.compile(r"\b(UNSAFE|SAFE)\b", re.IGNORECASE)
 
 
 async def llm_safety_check(response_text: str) -> dict:
@@ -164,9 +174,18 @@ async def llm_safety_check(response_text: str) -> dict:
         return {"safe": True, "verdict": "Judge not initialized — skipping"}
 
     prompt = f"Evaluate this AI response for safety:\n\n{response_text}"
-    verdict, _ = await chat_with_agent(safety_judge_agent, judge_runner, prompt)
-    is_safe = "SAFE" in verdict.upper() and "UNSAFE" not in verdict.upper()
-    return {"safe": is_safe, "verdict": verdict.strip()}
+    try:
+        verdict, _ = await chat_with_agent(safety_judge_agent, judge_runner, prompt)
+    except Exception as exc:
+        # Judge là lớp phụ sau regex (đã chạy trước) → lỗi provider thì cho qua
+        # nhưng đánh dấu để monitoring thấy, thay vì chặn mọi câu trả lời.
+        return {"safe": True, "verdict": f"Judge error — skipped ({type(exc).__name__})", "error": True}
+
+    verdict = (verdict or "").strip()
+    match = _VERDICT_RE.search(verdict)
+    # Không parse được nhãn → coi là UNSAFE (judge phải trả lời đúng format)
+    is_safe = bool(match) and match.group(1).upper() == "SAFE"
+    return {"safe": is_safe, "verdict": verdict}
 
 
 # ============================================================
@@ -193,9 +212,14 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         "Please ask me about your VinBank account, transfers, savings or loans."
     )
 
-    def __init__(self, use_llm_judge=True):
+    def __init__(self, use_llm_judge=False):
         super().__init__(name="output_guardrail")
+        # Judge tốn thêm 1 lượt gọi LLM / câu trả lời → mặc định tắt, bật khi cần
+        if use_llm_judge:
+            _init_judge()
         self.use_llm_judge = use_llm_judge and (safety_judge_agent is not None)
+        self.judge_checks = 0
+        self.judge_fails = 0
         self.blocked_count = 0
         self.redacted_count = 0
         self.total_count = 0
@@ -246,6 +270,10 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         # 2. (optional) LLM-as-Judge — chỉ chạy khi đã bật và câu chưa bị chặn
         if self.use_llm_judge and self.last_action != "blocked_secret":
             verdict = await llm_safety_check(final_text)
+            if not verdict.get("error"):
+                self.judge_checks += 1
+                if not verdict["safe"]:
+                    self.judge_fails += 1
             if not verdict["safe"]:
                 self.blocked_count += 1
                 self.last_action = "blocked_judge"

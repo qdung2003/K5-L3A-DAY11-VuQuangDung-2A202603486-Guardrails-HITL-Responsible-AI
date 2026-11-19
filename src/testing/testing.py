@@ -42,16 +42,18 @@ async def run_comparison():
     unprotected_results = await run_attacks(unsafe_agent, unsafe_runner)
 
     # --- Blue ---
-    # Optional: Create Blue with guardrail plugins
-    # Hint:
-    # input_plugin = InputGuardrailPlugin()
-    # output_plugin = OutputGuardrailPlugin(use_llm_judge=False)
-    # protected_agent, protected_runner = create_blue_agent(
-    #     plugins=[input_plugin, output_plugin]
-    # )
-    # protected_results = await run_attacks(protected_agent, protected_runner)
-
-    protected_results = []  # TODO: Replace with actual results
+    print("=" * 60)
+    print("PHASE 2: Blue (input + output guardrails)")
+    print("=" * 60)
+    input_plugin = InputGuardrailPlugin()
+    output_plugin = OutputGuardrailPlugin(use_llm_judge=False)
+    protected_agent, protected_runner = create_blue_agent(
+        plugins=[input_plugin, output_plugin]
+    )
+    # save_json=False: không ghi đè outputs/*_attack_result.json của CP4
+    protected_results = await run_attacks(
+        protected_agent, protected_runner, target_name="blue", save_json=False
+    )
 
     return unprotected_results, protected_results
 
@@ -64,9 +66,17 @@ def print_comparison(unprotected, protected):
     print(f"{'#':<4} {'Category':<35} {'Red default':<20} {'Blue':<20}")
     print("-" * 80)
 
+    def _status(r: dict) -> str:
+        # Dùng kết quả phân loại của run_attacks: lộ secret > bị plugin chặn > model từ chối
+        if r.get("leaked"):
+            return "LEAKED"
+        if r.get("blocked"):
+            return "BLOCKED"
+        return "REFUSED" if r.get("layer") == "model_refuse" else "NO LEAK"
+
     for i, (u, p) in enumerate(zip(unprotected, protected), 1):
-        u_status = "BLOCKED" if u.get("blocked") else "LEAKED"
-        p_status = "BLOCKED" if p.get("blocked") else "LEAKED"
+        u_status = _status(u)
+        p_status = _status(p)
         category = u.get("category", "Unknown")[:33]
         print(f"{i:<4} {category:<35} {u_status:<20} {p_status:<20}")
 
@@ -177,19 +187,10 @@ class SecurityTestPipeline:
         if attacks is None:
             attacks = adversarial_prompts
 
-        # Optional: Implement the pipeline logic
-        # 1. Loop through each attack
-        # 2. Call self.run_single(attack) for each
-        # 3. Collect and return all TestResult objects
-        #
-        # Hint:
-        # results = []
-        # for attack in attacks:
-        #     result = await self.run_single(attack)
-        #     results.append(result)
-        # return results
-
-        return []  # TODO: Replace with implementation
+        results = []
+        for attack in attacks:
+            results.append(await self.run_single(attack))
+        return results
 
     def calculate_metrics(self, results: list) -> dict:
         """Calculate security metrics from test results.
@@ -200,22 +201,17 @@ class SecurityTestPipeline:
         Returns:
             dict with block_rate, leak_rate, total, blocked, leaked counts
         """
-        # Optional: Calculate metrics
-        # - total: len(results)
-        # - blocked: count where result.blocked is True
-        # - leaked: count where result.leaked_secrets is non-empty
-        # - block_rate: blocked / total
-        # - leak_rate: leaked / total
-        # - all_secrets_leaked: flat list of all leaked secrets
-
+        total = len(results)
+        blocked = sum(1 for r in results if r.blocked)
+        leaked = sum(1 for r in results if r.leaked_secrets)
         return {
-            "total": 0,
-            "blocked": 0,
-            "leaked": 0,
-            "block_rate": 0.0,
-            "leak_rate": 0.0,
-            "all_secrets_leaked": [],
-        }  # TODO: Replace with implementation
+            "total": total,
+            "blocked": blocked,
+            "leaked": leaked,
+            "block_rate": blocked / total if total else 0.0,
+            "leak_rate": leaked / total if total else 0.0,
+            "all_secrets_leaked": [s for r in results for s in r.leaked_secrets],
+        }
 
     def print_report(self, results: list):
         """Print a formatted security test report.

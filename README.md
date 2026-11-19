@@ -1,5 +1,36 @@
 # Day 11 — Controlled Agent Security (2026)
 
+## Bài nộp
+
+| | |
+|---|---|
+| Họ tên | Vu Quang Dung |
+| MSSV | 2A202603486 |
+| Lớp | K5 — L3A |
+| Blue model | OpenRouter `liquid/lfm-3-1.7b:free` |
+| Red / Red Advance model | OpenAI `gpt-4o-mini` |
+
+**Cách chạy** (từ gốc repo, Windows PowerShell):
+
+```powershell
+python -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env   # điền OPENROUTER_API_KEY, RED_TEAM_PROVIDER=openai, OPENAI_API_KEY
+python src/main.py --part 2   # CP2 — guardrails (in terminal)
+python src/main.py --part 3   # CP3 — outputs/results.json, audit_log.json, metrics.json
+python src/main.py --part 4   # CP4 — outputs/attack_results.json (+ unsafe/guards)
+pytest tests -q
+python scripts/grade.py --submission-dir . --out outputs/grade_report.json
+```
+
+**Đã làm**
+
+- **CP2** — `src/guardrails/input_guardrails.py`: chuẩn hoá Unicode (NFKC, xoá zero-width, bỏ dấu) rồi phát hiện injection EN/VI (ghi đè chỉ dẫn, đổi vai, moi system prompt/secret, SQL/script); topic filter theo tiền tố từ. `output_guardrails.py`: che SĐT VN, email, CCCD, `sk-…`, password, host `*.internal`; lộ secret lab → thay cả câu trả lời (fail-closed); LLM-as-Judge tuỳ chọn.
+- **CP3** — `src/assignment/`: rate limit cửa sổ trượt theo user, audit log (latency, lớp chặn, lý do), monitoring + alert theo ngưỡng, egress allowlist chính xác theo hostname HTTPS + chặn payload nhạy cảm, bộ test 4 nhóm ghi `outputs/*.json`.
+- **Tuỳ chọn** — `src/hitl/hitl.py` (ConfidenceRouter + 3 điểm HITL), `src/testing/testing.py` (so sánh Red vs Blue, SecurityTestPipeline).
+
+---
+
 > 👤 **Hình thức:** bài tập **cá nhân** (1 người / 1 MSSV).  
 > 🎯 **Mục tiêu:** đóng vai **Blue Team** để học cách xây Guardrails phòng thủ, rồi đóng vai **Red Team** để tấn công agent **Red** hoặc **Red Advance**.  
 > ✅ Làm theo **Checkpoint 1 → 5** trong [`CHECKPOINTS.md`](CHECKPOINTS.md) · nộp theo [`SUBMISSION.md`](SUBMISSION.md).
